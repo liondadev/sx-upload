@@ -1,0 +1,7 @@
+.idea
+.git*
+.git
+config.json
+Dockerfile
+.dockerignore
+*.db

@@ -1,0 +1,11 @@
+{
+  "users": {
+    "lion": {
+      "max_upload_size": 450000
+    }
+  },
+  "keys": {
+    "test": "lion"
+  },
+  "admin_token": "admin"
+}
