@@ -62,6 +62,34 @@ async function getFiles() {
   return json.data;
 }
 
+async function doRenameFile(url, currentName) {
+  const token = getAccessToken();
+  if (!token) return false;
+
+  let newName = prompt("What should this file be called?", currentName);
+  if (!newName || newName.trim() == "") {
+    return;
+  }
+
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "X-SX-API-KEY": token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: newName,
+    }),
+  });
+  if (res.status !== 200) {
+    alert("Failed to rename. Check console.");
+    console.log(res);
+    return;
+  }
+
+  window.location = window.location;
+}
+
 function buildFileEntriesHTML(files) {
   let html = "";
 
@@ -79,8 +107,9 @@ function buildFileEntriesHTML(files) {
             <img src="${url}" alt="Preview Photo" />
           </a>
           <div class="content">
-            <p class="title">${file.id}${file.ext}</p>
+            <p class="title">${file.original_filename} (${file.id})</p>
             <div class="span">
+              <a class="rename" onClick="doRenameFile('${url}', '${file.original_filename}')">Rename</a>
               <a href="${deleteUrl}">Delete</a>
             </div>
           </div>
@@ -94,8 +123,9 @@ function buildFileEntriesHTML(files) {
             <p class="wrn-text">No preview available for this filetype. Click to open the file in a new tab.</p>
           </a>
           <div class="content">
-            <p class="title">${file.id}${file.ext}</p>
+            <p class="title">${file.original_filename} (${file.id})</p>
             <div class="span">
+              <a class="rename" onClick="doRenameFile('${url}', '${file.original_filename}')">Rename</a>
               <a href="${deleteUrl}">Delete</a>
             </div>
           </div>
