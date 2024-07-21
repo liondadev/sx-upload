@@ -23,7 +23,7 @@ func NewServer(db *sqlx.DB, conf *config.Config) *Server {
 	mux := http.NewServeMux()
 
 	mux.Handle("/upload", log.WrapHandler(logger, &uploadHandler{db: db, conf: conf}))
-	mux.Handle("/f/", log.WrapHandler(logger, &viewHandler{db: db}))
+	mux.Handle("/f/", log.WrapHandler(logger, &viewHandler{db: db, conf: conf}))
 	mux.Handle("/del", log.WrapHandler(logger, &deleteHandler{db: db}))
 	mux.Handle("/export", log.WrapHandler(logger, &exportHandler{db: db, conf: conf}))
 	mux.Handle("/test-auth", log.WrapHandler(logger, &authHandler{db: db, conf: conf}))

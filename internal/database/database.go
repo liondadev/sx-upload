@@ -43,6 +43,7 @@ func createTables(db *sqlx.DB) error {
 			"user_id" INTEGER NOT NULL,
 			"ext" TEXT NOT NULL,
 			"blob" BLOB NOT NULL,
+			"original_filename" TEXT NOT NULL DEFAULT '',
 			"delete_token" TEXT NOT NULL
 		);
     `); err != nil {

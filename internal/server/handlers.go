@@ -3,6 +3,7 @@ package server
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,7 @@ type filesHandler struct {
 
 func (f *filesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a POST request", jMap{})
+		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET request", jMap{})
 		return
 	}
 
@@ -39,13 +40,14 @@ func (f *filesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type row struct {
-		Id          string `db:"id" json:"id"`
-		Ext         string `db:"ext" json:"ext"`
-		DeleteToken string `db:"delete_token" json:"delete_token"`
+		Id               string `db:"id" json:"id"`
+		Ext              string `db:"ext" json:"ext"`
+		DeleteToken      string `db:"delete_token" json:"delete_token"`
+		OriginalFilename string `db:"original_filename" json:"original_filename"`
 	}
 
 	var result []row
-	if err := f.db.Select(&result, `SELECT "id", "ext", "delete_token" FROM "files" where "user_id" = ?`, userId); err != nil {
+	if err := f.db.Select(&result, `SELECT "id", "ext", "delete_token", "original_filename" FROM "files" where "user_id" = ?`, userId); err != nil {
 		_ = writeResponse(w, http.StatusUnauthorized, "Failed to perform select.", jMap{})
 		return
 	}
@@ -129,11 +131,12 @@ func (u *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	deleteToken := id.New(32)
 
 	_, err = u.db.Exec(
-		`INSERT INTO "files" ("id", "user_id", "delete_token", "ext", "blob") VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO "files" ("id", "user_id", "delete_token", "ext", "original_filename", "blob") VALUES (?, ?, ?, ?, ?, ?)`,
 		fileId,
 		u.conf.Keys[apiKey],
 		deleteToken,
 		ext,
+		h.Filename,
 		c,
 	)
 
@@ -150,21 +153,11 @@ func (u *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type viewHandler struct {
-	db *sqlx.DB
+	db   *sqlx.DB
+	conf *config.Config
 }
 
-func (v *viewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET request", jMap{})
-		return
-	}
-
-	parts := strings.Split(r.URL.Path, "/")
-	fileName := parts[2]
-
-	// strip ending extension if it has one
-	fileId := fileName[0 : len(fileName)-len(path.Ext(fileName))]
-
+func (v *viewHandler) handleGet(w http.ResponseWriter, r *http.Request, fileId string) {
 	type row struct {
 		Blob []byte `db:"blob"`
 	}
@@ -177,6 +170,87 @@ func (v *viewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(200)
 	w.Write(result.Blob)
+}
+
+func (v *viewHandler) handlePut(w http.ResponseWriter, r *http.Request, fileId string) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		_ = writeResponse(w, http.StatusBadRequest, "This request expects Content-Type of application/json", jMap{})
+		return
+	}
+
+	apiKey := r.Header.Get("X-SX-API-KEY")
+	if apiKey == "" {
+		_ = writeResponse(w, http.StatusUnauthorized, "No APIKey specified (X-SX-API-KEY)", jMap{})
+		return
+	}
+
+	userId, found := v.conf.Keys[apiKey]
+	if !found {
+		_ = writeResponse(w, http.StatusUnauthorized, "Invalid API Key", jMap{})
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		_ = writeResponse(w, http.StatusInternalServerError, "Internal Server Error while reading body bytes", jMap{})
+		return
+	}
+
+	type Body struct {
+		Name string `json:"name"`
+	}
+	var body Body
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		_ = writeResponse(w, http.StatusBadRequest, "Failed to parse body.", jMap{})
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+
+	if body.Name == "" {
+		_ = writeResponse(w, http.StatusBadRequest, "'name' field must be non-empty", jMap{})
+		return
+	}
+
+	result, err := v.db.Exec("UPDATE `files` SET `original_filename` = ? WHERE `id` = ? AND `user_id` = ? LIMIT 1", body.Name, fileId, userId)
+	if err != nil {
+		_ = writeResponse(w, http.StatusInternalServerError, "Internal Server Error when making HTTP request.", jMap{})
+		return
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil || n < 1 {
+		_ = writeResponse(w, http.StatusInternalServerError, "Either no rows were affected or we failed to get the # of rows affected.", jMap{})
+		return
+	}
+
+	_ = writeResponse(w, http.StatusOK, "", jMap{})
+}
+
+func (v *viewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET or PUT request", jMap{})
+		return
+	}
+
+	// Get file ID (required for both handlers)
+	parts := strings.Split(r.URL.Path[1:], "/") // [1:] removes the first trailing slash
+	if len(parts) != 2 {
+		_ = writeResponse(w, http.StatusNotFound, "Invalid # of arguments (2 expected)", jMap{})
+		return
+	}
+	fileName := parts[1]
+	fileId := fileName[0 : len(fileName)-len(path.Ext(fileName))]
+
+	switch r.Method {
+	case http.MethodGet:
+		v.handleGet(w, r, fileId)
+		return
+	case http.MethodPut:
+		v.handlePut(w, r, fileId)
+		return
+	}
+
+	_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET or PUT request", jMap{})
 }
 
 type deleteHandler struct {
