@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/liondadev/sx-host/internal/betterlog"
 	"net/http"
 )
 
@@ -17,7 +19,22 @@ func writeJson(w http.ResponseWriter, body interface{}) error {
 	return err
 }
 
-func writeResponse(w http.ResponseWriter, status int, message string, data interface{}) error {
+func writeResponse(w http.ResponseWriter, r *http.Request, status int, message string, data interface{}) error {
+	if status < 200 || status > 200 {
+		var passedData []any
+
+		fmt.Println(data)
+		fields, ok := data.(jMap)
+		if ok {
+			for key, val := range fields {
+				fmt.Println(key, val)
+				passedData = append(passedData, key, val)
+			}
+		}
+
+		_ = betterlog.Error(r, message, passedData...)
+	}
+
 	w.WriteHeader(status)
 	return writeJson(w, jMap{
 		"status":  status,

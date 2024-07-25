@@ -7,8 +7,8 @@ import (
 	"os"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/liondadev/sx-host/internal/betterlog"
 	"github.com/liondadev/sx-host/internal/config"
-	"github.com/liondadev/sx-host/internal/log"
 )
 
 type Server struct {
@@ -22,12 +22,12 @@ func NewServer(db *sqlx.DB, conf *config.Config) *Server {
 
 	mux := http.NewServeMux()
 
-	mux.Handle("/upload", log.WrapHandler(logger, &uploadHandler{db: db, conf: conf}))
-	mux.Handle("/f/", log.WrapHandler(logger, &viewHandler{db: db, conf: conf}))
-	mux.Handle("/del", log.WrapHandler(logger, &deleteHandler{db: db}))
-	mux.Handle("/export", log.WrapHandler(logger, &exportHandler{db: db, conf: conf}))
-	mux.Handle("/test-auth", log.WrapHandler(logger, &authHandler{db: db, conf: conf}))
-	mux.Handle("/files", log.WrapHandler(logger, &filesHandler{db: db, conf: conf}))
+	mux.Handle("/upload", betterlog.WrapHandler(logger, &uploadHandler{db: db, conf: conf}))
+	mux.Handle("/f/", betterlog.WrapHandler(logger, &viewHandler{db: db, conf: conf}))
+	mux.Handle("/del", betterlog.WrapHandler(logger, &deleteHandler{db: db}))
+	mux.Handle("/export", betterlog.WrapHandler(logger, &exportHandler{db: db, conf: conf}))
+	mux.Handle("/test-auth", betterlog.WrapHandler(logger, &authHandler{db: db, conf: conf}))
+	mux.Handle("/files", betterlog.WrapHandler(logger, &filesHandler{db: db, conf: conf}))
 
 	var staticPath = "./static"
 	pathEnv, ok := os.LookupEnv("SX_STATIC_DIR")

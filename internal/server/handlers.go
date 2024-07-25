@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/liondadev/sx-host/internal/betterlog"
 	"io"
 	"net/http"
 	"path"
@@ -16,6 +17,24 @@ import (
 	"github.com/liondadev/sx-host/internal/id"
 )
 
+const (
+	ErrExpectedMethodGet       = "Received invalid method, expected GET"
+	ErrExpectedMethodPost      = "Received invalid method, expected POST"
+	ErrExpectedMethodGetOrPut  = "Received invalid method, expected GET or PUT"
+	ErrNoAPIKeySpecified       = "No APIKey specified (X-SX-API-KEY)"
+	ErrNoFilePassed            = "No file provided in request (file form param)"
+	ErrFileToLarge             = "File too large"
+	ErrInvalidAPIKey           = "Invalid API Key"
+	ErrResourceNotFound        = "Resource not found"
+	ErrInvalidArguments        = "Invalid # of arguments expected"
+	ErrExpectedApplicationJson = "Expected Content-Type of application/json"
+	ErrSQLError                = "Encountered SQL error"
+	ErrFailedReadBytes         = "Failed to read content to bytes"
+	ErrFailedParse             = "Failed to parse body"
+	ErrNameNonEmpty            = "'name' field must be non-empty"
+	ErrFailCloseFile           = "Failed to close file"
+)
+
 type filesHandler struct {
 	db   *sqlx.DB
 	conf *config.Config
@@ -23,19 +42,20 @@ type filesHandler struct {
 
 func (f *filesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET request", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodGet, jMap{})
 		return
 	}
 
 	apiKey := r.Header.Get("X-Sx-Api-Key")
 	if apiKey == "" {
-		_ = writeResponse(w, http.StatusUnauthorized, "No APIKey specified (X-SX-API-KEY)", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrNoAPIKeySpecified, jMap{})
 		return
 	}
 
 	userId, found := f.conf.Keys[apiKey]
 	if !found {
-		_ = writeResponse(w, http.StatusUnauthorized, "Invalid APIKey", jMap{})
+
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
@@ -48,11 +68,12 @@ func (f *filesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var result []row
 	if err := f.db.Select(&result, `SELECT "id", "ext", "delete_token", "original_filename" FROM "files" where "user_id" = ?`, userId); err != nil {
-		_ = writeResponse(w, http.StatusUnauthorized, "Failed to perform select.", jMap{})
+		_ = betterlog.Error(r, "Failed to select file list", "err", err)
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrSQLError, jMap{})
 		return
 	}
 
-	_ = writeResponse(w, http.StatusOK, "", result)
+	_ = writeResponse(w, r, http.StatusOK, "", result)
 }
 
 type authHandler struct {
@@ -62,23 +83,23 @@ type authHandler struct {
 
 func (a *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a POST request", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodGet, jMap{})
 		return
 	}
 
 	apiKey := r.Header.Get("X-Sx-Api-Key")
 	if apiKey == "" {
-		_ = writeResponse(w, http.StatusUnauthorized, "No APIKey specified (X-SX-API-KEY)", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrNoAPIKeySpecified, jMap{})
 		return
 	}
 
 	us, err := a.conf.UserFromKey(apiKey)
 	if err != nil {
-		_ = writeResponse(w, http.StatusUnauthorized, "Invalid APIKey", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
-	_ = writeResponse(w, http.StatusOK, "", jMap{
+	_ = writeResponse(w, r, http.StatusOK, "", jMap{
 		"user": us,
 	})
 }
@@ -90,30 +111,30 @@ type uploadHandler struct {
 
 func (u *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a POST request", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodPost, jMap{})
 		return
 	}
 
 	apiKey := r.Header.Get("X-SX-API-KEY")
 	if apiKey == "" {
-		_ = writeResponse(w, http.StatusUnauthorized, "No APIKey specified (X-SX-API-KEY)", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrNoAPIKeySpecified, jMap{})
 		return
 	}
 
 	us, err := u.conf.UserFromKey(apiKey)
 	if err != nil {
-		_ = writeResponse(w, http.StatusUnauthorized, "Invalid APIKey", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
 	f, h, err := r.FormFile("file")
 	if err != nil {
-		_ = writeResponse(w, http.StatusBadRequest, "No file passed ('file' field)", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrNoFilePassed, jMap{})
 		return
 	}
 
 	if h.Size > us.MaxUploadSize {
-		_ = writeResponse(w, http.StatusBadRequest, "File too large", jMap{
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrFileToLarge, jMap{
 			"max_size": us.MaxUploadSize,
 		})
 		return
@@ -123,7 +144,7 @@ func (u *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	c, err := io.ReadAll(f)
 	if err != nil {
-		_ = writeResponse(w, http.StatusInternalServerError, "Failed to read content of file into buffer", jMap{})
+		_ = writeResponse(w, r, http.StatusInternalServerError, "Failed to read content of file into buffer", jMap{})
 		return
 	}
 
@@ -142,11 +163,11 @@ func (u *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		fmt.Println(err)
-		_ = writeResponse(w, http.StatusInternalServerError, "Failed to save file to SQLite", jMap{})
+		_ = writeResponse(w, r, http.StatusInternalServerError, "Failed to save file to SQLite", jMap{})
 		return
 	}
 
-	_ = writeResponse(w, http.StatusCreated, "Created!", jMap{
+	_ = writeResponse(w, r, http.StatusCreated, "Created!", jMap{
 		"link":   baseurl.GetBaseUrl() + "/f/" + fileId + ext,
 		"delete": baseurl.GetBaseUrl() + "/del?f=" + fileId + "&t=" + deleteToken,
 	})
@@ -158,41 +179,45 @@ type viewHandler struct {
 }
 
 func (v *viewHandler) handleGet(w http.ResponseWriter, r *http.Request, fileId string) {
+	_ = r
+
 	type row struct {
 		Blob []byte `db:"blob"`
 	}
 
 	var result row
 	if err := v.db.Get(&result, `SELECT blob FROM "files" WHERE "id" = ? LIMIT 1`, fileId); err != nil {
-		_ = writeResponse(w, http.StatusNotFound, "File not found.", jMap{})
+		_ = betterlog.Error(r, "Failed to SELECT file for viewing", "err", err)
+		_ = writeResponse(w, r, http.StatusNotFound, ErrResourceNotFound, jMap{})
 		return
 	}
 
 	w.WriteHeader(200)
-	w.Write(result.Blob)
+	_, _ = w.Write(result.Blob)
 }
 
 func (v *viewHandler) handlePut(w http.ResponseWriter, r *http.Request, fileId string) {
 	if r.Header.Get("Content-Type") != "application/json" {
-		_ = writeResponse(w, http.StatusBadRequest, "This request expects Content-Type of application/json", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedApplicationJson, jMap{})
 		return
 	}
 
 	apiKey := r.Header.Get("X-SX-API-KEY")
 	if apiKey == "" {
-		_ = writeResponse(w, http.StatusUnauthorized, "No APIKey specified (X-SX-API-KEY)", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrNoAPIKeySpecified, jMap{})
 		return
 	}
 
 	userId, found := v.conf.Keys[apiKey]
 	if !found {
-		_ = writeResponse(w, http.StatusUnauthorized, "Invalid API Key", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		_ = writeResponse(w, http.StatusInternalServerError, "Internal Server Error while reading body bytes", jMap{})
+		_ = betterlog.Error(r, "Failed to read request body into bytes", "err", err)
+		_ = writeResponse(w, r, http.StatusInternalServerError, ErrFailedReadBytes, jMap{})
 		return
 	}
 
@@ -201,41 +226,42 @@ func (v *viewHandler) handlePut(w http.ResponseWriter, r *http.Request, fileId s
 	}
 	var body Body
 	if err := json.Unmarshal(bodyBytes, &body); err != nil {
-		_ = writeResponse(w, http.StatusBadRequest, "Failed to parse body.", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrFailedParse, jMap{})
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
 
 	if body.Name == "" {
-		_ = writeResponse(w, http.StatusBadRequest, "'name' field must be non-empty", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrNameNonEmpty, jMap{})
 		return
 	}
 
-	result, err := v.db.Exec("UPDATE `files` SET `original_filename` = ? WHERE `id` = ? AND `user_id` = ? LIMIT 1", body.Name, fileId, userId)
+	result, err := v.db.Exec("UPDATE `files` SET `original_filename` = ? WHERE `id` = ? AND `user_id` = ?", body.Name, fileId, userId)
 	if err != nil {
-		_ = writeResponse(w, http.StatusInternalServerError, "Internal Server Error when making HTTP request.", jMap{})
+		_ = betterlog.Error(r, "Error when renaming file", "fileId", fileId, "err", err)
+		_ = writeResponse(w, r, http.StatusNotFound, ErrResourceNotFound, jMap{})
 		return
 	}
 
 	n, err := result.RowsAffected()
 	if err != nil || n < 1 {
-		_ = writeResponse(w, http.StatusInternalServerError, "Either no rows were affected or we failed to get the # of rows affected.", jMap{})
+		_ = writeResponse(w, r, http.StatusNotFound, ErrResourceNotFound, jMap{})
 		return
 	}
 
-	_ = writeResponse(w, http.StatusOK, "", jMap{})
+	_ = writeResponse(w, r, http.StatusOK, "", jMap{})
 }
 
 func (v *viewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPut {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET or PUT request", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodGetOrPut, jMap{})
 		return
 	}
 
 	// Get file ID (required for both handlers)
 	parts := strings.Split(r.URL.Path[1:], "/") // [1:] removes the first trailing slash
 	if len(parts) != 2 {
-		_ = writeResponse(w, http.StatusNotFound, "Invalid # of arguments (2 expected)", jMap{})
+		_ = writeResponse(w, r, http.StatusNotFound, ErrInvalidArguments, jMap{})
 		return
 	}
 	fileName := parts[1]
@@ -250,7 +276,7 @@ func (v *viewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET or PUT request", jMap{})
+	_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodGetOrPut, jMap{})
 }
 
 type deleteHandler struct {
@@ -259,19 +285,19 @@ type deleteHandler struct {
 
 func (d *deleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET request", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodGet, jMap{})
 		return
 	}
 
 	toks, ok := r.URL.Query()["t"]
 	if !ok {
-		_ = writeResponse(w, http.StatusNotFound, "Invalid token", jMap{})
+		_ = writeResponse(w, r, http.StatusNotFound, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
 	fileIds, ok := r.URL.Query()["f"]
 	if !ok {
-		_ = writeResponse(w, http.StatusNotFound, "Invalid token", jMap{})
+		_ = writeResponse(w, r, http.StatusNotFound, ErrResourceNotFound, jMap{})
 		return
 	}
 
@@ -280,19 +306,19 @@ func (d *deleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	result, err := d.db.Exec(`DELETE FROM "files" WHERE "id" = ? AND "delete_token" = ?`, fileId, tok)
 	if err != nil {
-		fmt.Println(err)
-		_ = writeResponse(w, http.StatusNotFound, "Failed to remove image", jMap{})
+		_ = betterlog.Error(r, "Failed to delete from files table", "err", err, "fileId", fileId, "deleteToken", tok)
+		_ = writeResponse(w, r, http.StatusNotFound, ErrSQLError, jMap{})
 		return
 	}
 
 	affect, err := result.RowsAffected()
 	if err != nil {
-		_ = writeResponse(w, http.StatusNotFound, "Failed to fetch rows affected", jMap{})
+		_ = writeResponse(w, r, http.StatusNotFound, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
 	if affect < 1 {
-		_ = writeResponse(w, http.StatusNotFound, "Invalid image ID", jMap{})
+		_ = writeResponse(w, r, http.StatusNotFound, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
@@ -306,19 +332,19 @@ type exportHandler struct {
 
 func (d *exportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		_ = writeResponse(w, http.StatusBadRequest, "This route expects a GET request", jMap{})
+		_ = writeResponse(w, r, http.StatusBadRequest, ErrExpectedMethodGet, jMap{})
 		return
 	}
 
 	apiKey := r.Header.Get("X-SX-API-KEY")
 	if apiKey == "" {
-		_ = writeResponse(w, http.StatusUnauthorized, "No APIKey specified (X-SX-API-KEY)", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrNoAPIKeySpecified, jMap{})
 		return
 	}
 
 	userId, ok := d.conf.Keys[apiKey]
 	if !ok {
-		_ = writeResponse(w, http.StatusUnauthorized, "Invalid APIKey", jMap{})
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrInvalidAPIKey, jMap{})
 		return
 	}
 
@@ -329,8 +355,8 @@ func (d *exportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var results []row
 	if err := d.db.Select(&results, `SELECT "id", "ext", "blob" FROM "files" WHERE "user_id" = ?`, userId); err != nil {
-		fmt.Println(err)
-		_ = writeResponse(w, http.StatusUnauthorized, "Failed to select files to export.", jMap{})
+		_ = betterlog.Error(r, "Failed to select files for export", "userId", userId)
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrSQLError, jMap{})
 		return
 	}
 
@@ -340,20 +366,21 @@ func (d *exportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range results {
 		f, err := zW.Create(entry.Id + entry.Ext)
 		if err != nil {
-			fmt.Printf("Failed to add %s to zip file: %s", entry.Id, err)
+			_ = betterlog.Error(r, "Failed to create file in zip export file", "id", entry.Id, "err", err)
 			continue
 		}
 
 		_, err = f.Write(entry.Blob)
 		if err != nil {
-			fmt.Printf("Failed to write to file %s: %s", entry.Id, err)
+			_ = betterlog.Error(r, "Failed to write file in zip export file", "id", entry.Id, "err", err)
 			continue
 		}
 	}
 
 	err := zW.Close()
 	if err != nil {
-		_ = writeResponse(w, http.StatusUnauthorized, "Failed to close zip file.", jMap{})
+		_ = betterlog.Error(r, "Failed to close export zip file", "err", err)
+		_ = writeResponse(w, r, http.StatusUnauthorized, ErrFailCloseFile, jMap{})
 		return
 	}
 
