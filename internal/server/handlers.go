@@ -3,13 +3,20 @@ package server
 import (
 	"archive/zip"
 	"bytes"
+	"embed"
 	"encoding/json"
 	"fmt"
-	"github.com/liondadev/sx-host/internal/betterlog"
+	"github.com/gomarkdown/markdown"
+	"github.com/gomarkdown/markdown/html"
+	"github.com/gomarkdown/markdown/parser"
+	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/liondadev/sx-host/internal/betterlog"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/liondadev/sx-host/internal/baseurl"
@@ -140,7 +147,7 @@ func (u *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := path.Ext(h.Filename)
+	ext := strings.ToLower(path.Ext(h.Filename))
 
 	c, err := io.ReadAll(f)
 	if err != nil {
@@ -178,21 +185,67 @@ type viewHandler struct {
 	conf *config.Config
 }
 
-func (v *viewHandler) handleGet(w http.ResponseWriter, r *http.Request, fileId string) {
-	_ = r
+//go:embed markdown.go.html
+var markdownViewFS embed.FS
+var markdownViewTemplate *template.Template
 
+// markdown -> html rendering
+var markdownParser *parser.Parser
+var htmlRenderer *html.Renderer
+
+func init() {
+	t, err := template.New("markdown.go.html").ParseFS(markdownViewFS, "markdown.go.html")
+	if err != nil {
+		log.Fatalf("Failed to parse markdown.go.html template: %s\n", err)
+		return
+	}
+
+	markdownViewTemplate = t
+}
+
+func (v *viewHandler) handleGet(w http.ResponseWriter, r *http.Request, fileId string) {
 	type row struct {
 		Blob []byte `db:"blob"`
+		Ext  string `db:"ext"`
 	}
 
 	var result row
-	if err := v.db.Get(&result, `SELECT blob FROM "files" WHERE "id" = ? LIMIT 1`, fileId); err != nil {
+	if err := v.db.Get(&result, `SELECT blob, ext FROM "files" WHERE "id" = ? LIMIT 1`, fileId); err != nil {
 		_ = betterlog.Error(r, "Failed to SELECT file for viewing", "err", err)
 		_ = writeResponse(w, r, http.StatusNotFound, ErrResourceNotFound, jMap{})
 		return
 	}
 
-	w.WriteHeader(200)
+	// Markdown files are served as normal HTML, but only when the request is to a .html endpoint
+	parts := strings.Split(r.URL.Path[1:], "/")
+	ext := strings.ToLower(path.Ext(parts[len(parts)-1]))
+
+	if ext == ".html" && (result.Ext == ".md" || result.Ext == ".markdown") {
+		extensions := parser.CommonExtensions | parser.AutoHeadingIDs | parser.NoEmptyLineBeforeBlock
+		p := parser.NewWithExtensions(extensions)
+		ast := p.Parse(result.Blob)
+
+		htmlFlags := html.CommonFlags
+		opts := html.RendererOptions{Flags: htmlFlags}
+		renderer := html.NewRenderer(opts)
+		html := markdown.Render(ast, renderer)
+
+		w.WriteHeader(http.StatusOK)
+		err := markdownViewTemplate.Execute(w, struct {
+			Content template.HTML
+			RawURL  string
+		}{template.HTML(html), fileId + result.Ext})
+
+		if err != nil {
+			_ = betterlog.Error(r, "Failed to execute template.", "err", err)
+			_ = writeResponse(w, r, http.StatusInternalServerError, ErrFailedParse, jMap{})
+			return
+		}
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result.Blob)
 }
 

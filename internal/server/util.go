@@ -3,8 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/liondadev/sx-host/internal/betterlog"
 	"net/http"
+
+	"github.com/liondadev/sx-host/internal/betterlog"
 )
 
 type jMap map[string]interface{}
@@ -23,7 +24,6 @@ func writeResponse(w http.ResponseWriter, r *http.Request, status int, message s
 	if status < 200 || status > 200 {
 		var passedData []any
 
-		fmt.Println(data)
 		fields, ok := data.(jMap)
 		if ok {
 			for key, val := range fields {
