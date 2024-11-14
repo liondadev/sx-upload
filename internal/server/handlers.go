@@ -6,15 +6,16 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"github.com/gomarkdown/markdown"
-	"github.com/gomarkdown/markdown/html"
-	"github.com/gomarkdown/markdown/parser"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/gomarkdown/markdown"
+	"github.com/gomarkdown/markdown/html"
+	"github.com/gomarkdown/markdown/parser"
 
 	"github.com/liondadev/sx-host/internal/betterlog"
 
@@ -215,6 +216,9 @@ func (v *viewHandler) handleGet(w http.ResponseWriter, r *http.Request, fileId s
 		_ = writeResponse(w, r, http.StatusNotFound, ErrResourceNotFound, jMap{})
 		return
 	}
+
+	// Cache control headers
+	w.Header().Set("Cache-Control", "public, max-age=1800")
 
 	// Markdown files are served as normal HTML, but only when the request is to a .html endpoint
 	parts := strings.Split(r.URL.Path[1:], "/")
